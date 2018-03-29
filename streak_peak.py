@@ -103,8 +103,6 @@ class multi_h5s_peaks:
 
 ########
 # process
-
-
 class SubImages:
     def __init__(self, img, y,x, sz, 
         mask=None, cent=None):
@@ -249,7 +247,8 @@ class SubImage:
         connect = np.sum( regions==cent_region)
         self.sig_mask = regions==cent_region
         #if min_conn < connect < max_conn:
-        counts = residual[ regions==cent_region].sum()
+        counts = residual[ regions==cent_region].mean()
+        #counts = residual[ regions==cent_region].sum()
         #else:
         #    counts = np.nan
         self.counts = counts
@@ -296,6 +295,7 @@ class SubImage:
         self.sig_pix = residual[self.sig_mask]
         #counts = residual[ regions==cent_region].sum()
         self.counts = self.sig_pix.sum()
+        #self.counts = self.sig_pix.mean()
         self.bg = bg
         self.sigma = noise
         self.N_connected = connect
@@ -309,7 +309,9 @@ class SubImage:
             self.mask*self.pixmask
 
         self.sig_pix =  residual[self.sig_mask]
-        self.counts = self.sig_pix.sum()
+        self.counts = self.sig_pix.mean()
+        #if self.counts < 0:
+        #    self.counts = 0
         self.bg = bg
         self.sigma = noise
         self.N_connected = np.nan
