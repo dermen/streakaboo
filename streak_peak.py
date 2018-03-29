@@ -5,8 +5,9 @@ import h5py
 from itertools import izip
 from scipy.ndimage.filters import gaussian_filter
 from scipy.ndimage.measurements import label
+from scipy.ndimage.measurements import center_of_mass
 import glob
-
+from scipy.ndimage.filters import gaussian_filter as gauss_filt
 
 from astride import Streak
 
@@ -34,9 +35,6 @@ class Imgs_from_dataframe:
         file_i = self.I[i]['file_i']
         shot_i = self.I[i]['shot_i']
         return self.h5s[file_i][self.data_path][shot_i]
-
-
-    
 
 
 class multi_h5s_img:
@@ -108,11 +106,17 @@ class multi_h5s_peaks:
 
 
 class SubImages:
-    def __init__(self, img, y,x, sz, cent=None):
+    def __init__(self, img, y,x, sz, 
+        mask=None, cent=None):
 
         if cent is None:
             self.cent =  (.5* img.shape[0], .5* img.shape[1] ) 
         self.img = img
+        if mask is None:
+            self.mask = np.one( self.img.shape, bool)
+        else:
+            assert( mask.shape == self.img.shape)
+            self.mask = mask.astype(bool)
         self.y = y
         self.x = x
         self.sz = sz
@@ -143,7 +147,10 @@ class SubImages:
             bounds['fast'] = [i1,i,i2]
 
             r = np.sqrt( (j-yo)**2 + (i-xo)**2)
-            sub = SubImage( img[ j1:j2, i1:i2 ] , bounds, r)
+            sub = SubImage( img[ j1:j2, i1:i2 ] , 
+                bounds, 
+                r, 
+                mask=self.mask[ j1:j2, i1:i2])
             self.sub_imgs.append(sub) 
     
     def integrate(self, **kwargs):
@@ -156,25 +163,46 @@ class SubImages:
 
 
 class SubImage:
-    def __init__(self, img, bounds=None, radius=None):
+    def __init__(self, img, bounds=None, radius=None, 
+        blind_radius=6, mask=None):
+
         self.img = img
+        if mask is None:
+            self.pixmask = np.ones( self.img.shape, bool)
+        else:
+            self.pixmask=mask
         if bounds is not None and radius is not None:
-            self.peak = int(bounds['slow'][1]), int(bounds['fast'][1])
-            self.rel_peak = int(bounds['slow'][1]-bounds['slow'][0]), \
-                int(bounds['fast'][1] - bounds['fast'][0] )
+            self.peak = int(bounds['slow'][1]), \
+                int(bounds['fast'][1])
+            self.rel_peak = int(bounds['slow'][1] -\
+                                bounds['slow'][0]), \
+                            int(bounds['fast'][1] - \
+                                bounds['fast'][0] )
             self.radius = radius
         else:
             self.peak = None
             self.radius = None 
 
         Y,X = np.indices( img.shape)
-        self.pix_pts = np.array( zip(X.ravel(), Y.ravel() ) )
+        self.pix_pts = np.array( zip(X.ravel(), 
+            Y.ravel() ) )
+
+        self.R = np.sqrt( (Y-self.rel_peak[0])**2 \
+            + (X-self.rel_peak[1])**2 )
     
-    def _set_streak_mask( self, **kwargs):
-        streak = Streak(self.img,
-            output_path='.',
-            **kwargs)
-        streak.detect()
+        self.blind_region = self.R < blind_radius
+
+    def _set_streak_mask( self, sig_G=None, **kwargs):
+        if sig_G is not None:
+            streak = Streak(gauss_filt(self.img, sig_G),
+                output_path='.',
+                **kwargs)
+            streak.detect()
+        else:
+            streak = Streak(self.img,
+                output_path='.',
+                **kwargs)
+            streak.detect()
         edges = streak.streaks
         if not edges:
             self.has_streak=False
@@ -190,26 +218,36 @@ class SubImage:
         self.mask = np.logical_not(mask)
         self.has_streak=True
 
-    def get_streak_mask(self, **kwargs):
-        self._set_streak_mask(**kwargs)
+    def get_streak_mask(self, sig_G=None, **kwargs):
+        self._set_streak_mask(sig_G=sig_G, **kwargs)
         return self.mask
 
-    def get_stats( self, **kwargs):
+    def get_stats( self, sig_G=None, **kwargs):
         img = self.img
         
-        self._set_streak_mask(**kwargs)
+        self._set_streak_mask(sig_G =sig_G, **kwargs)
 
-        bg = img[ self.mask == 1].mean()
-        noise = (img[self.mask ==1 ]-bg).std()
+        self.bg_mask = (self.mask==1)* self.pixmask
+        self.bg_pix = img[self.bg_mask].astype(float)
+        bg = self.bg_pix.mean()
+        self.bg_pix -= bg
+        noise = (img[ self.bg_mask ]-bg).std()
+        
         return bg, noise
 
-    def integrate_streak( self, min_conn=0, max_conn=np.inf, **kwargs):
-        assert( self.peak is not None and self.radius is not None)
+    def integrate_streak( self, min_conn=0, 
+        max_conn=np.inf, **kwargs):
+        
+        #assert( self.peak is not None and \
+        #    self.radius is not None)
+        
         bg, noise = self.get_stats(**kwargs)
         regions, n = label( ~self.mask)
         residual = self.img - bg
-        cent_region = regions[self.rel_peak[0], self.rel_peak[1]]
+        cent_region = regions[self.rel_peak[0], 
+            self.rel_peak[1]]
         connect = np.sum( regions==cent_region)
+        self.sig_mask = regions==cent_region
         #if min_conn < connect < max_conn:
         counts = residual[ regions==cent_region].sum()
         #else:
@@ -222,37 +260,60 @@ class SubImage:
         self.lab_dist=0
         #return counts, bg , noise, residual, connect
     
-    def integrate_pred_streak( self, min_conn=0, max_conn=np.inf, **kwargs):
-        assert( self.peak is not None and self.radius is not None)
-        bg, noise = self.get_stats(**kwargs)
+    def integrate_pred_streak( self, 
+        sig_G=None, dist_cut=np.inf, **kwargs):
+        
+        #assert( self.peak is not None and \
+        #    self.radius is not None)
+        bg, noise = self.get_stats(sig_G=sig_G, **kwargs)
+        
         regions, n = label( ~self.mask)
         if n == 0:
-            self.counts = np.nan
-            self.bg = np.nan
-            self.sigma = np.nan
-            self.peak_region = ~self.mask
-            self.N_connected = 0
+            self.integrate_blind(bg,noise)
             return
 
-        u_labs = [l for l in np.unique( regions) if l > 0]
-        lab_pos =  np.array( [ np.vstack( np.where( regions==l) ) .T.mean(0) 
-            for l in u_labs] )    
-        lab_dists = np.sqrt( np.sum( (lab_pos - np.array( self.rel_peak))**2) )
-        cent_region = np.argmin( lab_dists) +1
+        u_labs = np.arange( 1, 1+n)
+        lab_pos =  np.array( [ np.vstack( np.where( \
+            regions==l) ) .T.mean(0) 
+                for l in u_labs] )    
+        #lab_pos = center_of_mass( ~self.mask, 
+        #    regions, u_labs) 
 
+        lab_dists = np.sqrt( np.sum( \
+            (lab_pos - np.array( self.rel_peak))**2, 1) )
+         
+        cent_region = u_labs[ np.argmin( lab_dists)] # +1
+        peak_dist = lab_dists.min()
+        if peak_dist > dist_cut:
+            self.integrate_blind(bg,noise)
+            return 
         residual = self.img - bg
-        connect = sum( regions==cent_region)
+        connect = np.sum( regions==cent_region)
         #if min_conn < connect < max_conn:
-        counts = residual[ regions==cent_region].sum()
         #else:
         #    counts = np.nan
-        
-        self.counts = counts
+        self.sig_mask = (regions==cent_region)*self.pixmask
+        self.sig_pix = residual[self.sig_mask]
+        #counts = residual[ regions==cent_region].sum()
+        self.counts = self.sig_pix.sum()
         self.bg = bg
         self.sigma = noise
-        self.peak_region = regions==cent_region
         self.N_connected = connect
-        self.lab_dist =lab_dists.min()
+        self.lab_dist = peak_dist #lab_dists.min()
+
+    def integrate_blind(self, bg, noise):
+        
+        residual = self.img-bg
+        
+        self.sig_mask = self.blind_region * \
+            self.mask*self.pixmask
+
+        self.sig_pix =  residual[self.sig_mask]
+        self.counts = self.sig_pix.sum()
+        self.bg = bg
+        self.sigma = noise
+        self.N_connected = np.nan
+        self.lab_dist = np.nan
 
 def gen_from_df(df):
     gb = df.groupby('cxi_fname')
