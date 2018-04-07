@@ -109,6 +109,8 @@ class SubImages:
 
         if cent is None:
             self.cent =  (.5* img.shape[0], .5* img.shape[1] ) 
+        else:
+            self.cent = cent
         self.img = img
         if mask is None:
             self.mask = np.one( self.img.shape, bool)
@@ -201,17 +203,34 @@ class SubImage:
                 output_path='.',
                 **kwargs)
             streak.detect()
+        self.streak = streak
         edges = streak.streaks
         if not edges:
             self.has_streak=False
             self.mask =np.ones(self.img.shape, bool  ) 
+            self.circulaity= []
+            self.streak_centers = []
+            self.roundness = []
+            self.areas = []
             return
         verts = [ np.vstack(( edge['x'], edge['y'])).T 
                         for edge in edges]
         paths = [ plt.mpl.path.Path(v) 
                 for v in verts ]
+        
+        self.streak_centers = [ [edge['x_center'], \
+            edge['y_center']] for edge in edges ]
+        
+        self.circularity = [   edge['shape_factor'] 
+            for edge in edges]
+        self.roundness = [ edge['radius_deviation'] 
+            for edge in edges]
+        self.areas = [ edge['area'] for edge in edges]
+       
         contains = np.vstack( [ p.contains_points(self.pix_pts) 
             for p in paths ])
+        self.streak_masks = [ c.reshape( self.img.shape) 
+            for c in contains]
         mask = np.any( contains,0).reshape( self.img.shape)
         self.mask = np.logical_not(mask)
         self.has_streak=True
@@ -260,42 +279,57 @@ class SubImage:
         #return counts, bg , noise, residual, connect
     
     def integrate_pred_streak( self, 
-        sig_G=None, dist_cut=np.inf, **kwargs):
+            sig_G=None, 
+            dist_cut=np.inf, 
+            **kwargs):
         
         #assert( self.peak is not None and \
         #    self.radius is not None)
         bg, noise = self.get_stats(sig_G=sig_G, **kwargs)
         
-        regions, n = label( ~self.mask)
-        if n == 0:
+        #regions, n = label( ~self.mask)
+        
+        if not self.areas: #n == 0:
             self.integrate_blind(bg,noise)
             return
 
-        u_labs = np.arange( 1, 1+n)
-        lab_pos =  np.array( [ np.vstack( np.where( \
-            regions==l) ) .T.mean(0) 
-                for l in u_labs] )    
+        #u_labs = np.arange( 1, 1+n)
+        #lab_pos =  np.array( [ np.vstack( np.where( \
+        #    regions==l) ) .T.mean(0) 
+        #        for l in u_labs] )    
         #lab_pos = center_of_mass( ~self.mask, 
         #    regions, u_labs) 
 
+        #lab_dists = np.sqrt( np.sum( \
+        #    (lab_pos - np.array( self.rel_peak))**2, 1) )
+        
+        lab_pos = np.array( self.streak_centers)
         lab_dists = np.sqrt( np.sum( \
-            (lab_pos - np.array( self.rel_peak))**2, 1) )
-         
-        cent_region = u_labs[ np.argmin( lab_dists)] # +1
+            (lab_pos - np.array( self.rel_peak) )**2,1) )
+        idx = np.argmin( lab_dists)
+        
+        cent_region_ma = self.streak_masks[ idx]
+        self.area = self.areas[idx]
+        self.round = self.roundness[idx]
+        self.circ = self.circularity[idx]
+        #self.dist2 = lab_dists2[idx]
+
+        #cent_region = u_labs[ np.argmin( lab_dists)] # +1
         peak_dist = lab_dists.min()
         if peak_dist > dist_cut:
             self.integrate_blind(bg,noise)
             return 
         residual = self.img - bg
-        connect = np.sum( regions==cent_region)
+        
+        connect = np.sum( cent_region_ma)
         #if min_conn < connect < max_conn:
         #else:
         #    counts = np.nan
-        self.sig_mask = (regions==cent_region)*self.pixmask
+        self.sig_mask = (cent_region_ma)*self.pixmask
         self.sig_pix = residual[self.sig_mask]
         #counts = residual[ regions==cent_region].sum()
-        self.counts = self.sig_pix.sum()
-        #self.counts = self.sig_pix.mean()
+        #self.counts = self.sig_pix.sum()
+        self.counts = self.sig_pix.sum() #mean()
         self.bg = bg
         self.sigma = noise
         self.N_connected = connect
@@ -316,6 +350,9 @@ class SubImage:
         self.sigma = noise
         self.N_connected = np.nan
         self.lab_dist = np.nan
+        self.area = np.nan
+        self.round = np.nan
+        self.circ = np.nan
 
 def gen_from_df(df):
     gb = df.groupby('cxi_fname')
