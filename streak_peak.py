@@ -6,10 +6,35 @@ from itertools import izip
 from scipy.ndimage.filters import gaussian_filter
 from scipy.ndimage.measurements import label
 from scipy.ndimage.measurements import center_of_mass
+from scipy import optimize
 import glob
 from scipy.ndimage.filters import gaussian_filter as gauss_filt
 
 from astride import Streak
+
+
+def gauss(x, *p):
+    A, mu, sigma = p
+    return A*np.exp(-(x-mu)**2/(2.*sigma**2))
+
+def fit_gauss( peak_pro, xdata, width ):
+    mu     = xdata[ peak_pro.argmax() ] 
+    sig    = width
+    amp    =  peak_pro.ptp() /2.
+    offset   =  peak_pro.min()
+
+    guess =( amp, mu,  sig )
+
+    try:
+        fit,success = optimize.curve_fit( gauss, 
+                        xdata=xdata, ydata=peak_pro, p0 =guess )
+    except RuntimeError: 
+        return None
+    return fit, success,gauss(xdata, *fit)
+
+
+
+
 
 
 class Imgs_from_dataframe:
@@ -113,7 +138,7 @@ class SubImages:
             self.cent = cent
         self.img = img
         if mask is None:
-            self.mask = np.one( self.img.shape, bool)
+            self.mask = np.ones( self.img.shape, bool)
         else:
             assert( mask.shape == self.img.shape)
             self.mask = mask.astype(bool)
@@ -160,6 +185,7 @@ class SubImages:
     def integrate_preds(self, **kwargs):
         for s in self.sub_imgs:
             s.integrate_pred_streak(**kwargs)
+
 
 
 class SubImage:
@@ -247,9 +273,12 @@ class SubImage:
         self.bg_mask = (self.mask==1)* self.pixmask
         self.bg_pix = img[self.bg_mask].astype(float)
         bg = self.bg_pix.mean()
-        self.bg_pix -= bg
+        #self.bg_pix -= bg
         noise = (img[ self.bg_mask ]-bg).std()
         
+        self.bg_sub_sig = noise
+        self.bg_sub_mn = (img[ self.bg_mask ]-bg).mean()
+
         return bg, noise
 
     def integrate_streak( self, min_conn=0, 
@@ -334,8 +363,10 @@ class SubImage:
         self.sigma = noise
         self.N_connected = connect
         self.lab_dist = peak_dist #lab_dists.min()
-
-    def integrate_blind(self, bg, noise):
+        self.has_signal = True
+        self.used_gauss=False
+    
+    def integrate_blind(self, bg, noise, nbins=20, thresh=2.):
         
         residual = self.img-bg
         
@@ -343,16 +374,43 @@ class SubImage:
             self.mask*self.pixmask
 
         self.sig_pix =  residual[self.sig_mask]
-        self.counts = self.sig_pix.mean()
+       
+#       fit gaussian
+        a,b = np.histogram( self.bg_pix-bg, 
+            bins=nbins)
+        bb = b[:-1]*.5 + b[1:]*.5
+        fit = fit_gauss( a, bb, 10.)
+        
+        if fit:
+            self.used_gauss=True
+            m = fit[0][1]
+            s = fit[0][2]
+        else:
+            self.used_gauss=False
+            m = self.bg_sub_mn
+            s = self.bg_sub_sig
+        
+        sig_pixels = self.sig_pix[ self.sig_pix  > m +  thresh * s]
+        
+        if sig_pixels.size:
+            self.counts = sig_pixels.sum() #mean()
+            self.has_signal=True
+        else:
+            self.counts = m
+            self.has_signal=False
+        
         #if self.counts < 0:
         #    self.counts = 0
+        
         self.bg = bg
-        self.sigma = noise
+        self.sigma = s
         self.N_connected = np.nan
         self.lab_dist = np.nan
         self.area = np.nan
         self.round = np.nan
         self.circ = np.nan
+
+
 
 def gen_from_df(df):
     gb = df.groupby('cxi_fname')
@@ -371,10 +429,6 @@ def gen_from_df(df):
             pkY = i_g['ss/px'].values
             pkX = i_g['fs/px'].values
             yield img, pkY, pkX, f, i
-
-
-
-
 
 
 def make_sub_imgs( img, pk, sz):
@@ -489,6 +543,29 @@ def next_subs(im,y,x, sub_sz=10):
     subs = make_sub_imgs( im, pk, sub_sz )
     return subs
 
+
+
+def write_cxi_peaks( h5, peaks_path, pkX, pkY, pkI, data_inds):
+    
+    npeaks = np.array( [len(x) for x in pkX] )
+    max_n = max(npeaks)
+    Nimg = len( pkX )
+    
+    data_x = np.zeros((Nimg, max_n), dtype=np.float32)
+    data_y = np.zeros_like(data_x)
+    data_I = np.zeros_like(data_x)
+
+    for i in xrange( Nimg): 
+        n = npeaks[i]
+        data_x[i,:n] = pkX[i]
+        data_y[i,:n] = pkY[i]
+        data_I[i,:n] = pkI[i]
+    
+    peaks = h5.create_group(peaks_path)
+    peaks.create_dataset( 'nPeaks' , data=npeaks)
+    peaks.create_dataset( 'peakXPosRaw', data=data_x )
+    peaks.create_dataset( 'peakYPosRaw', data=data_y )
+    peaks.create_dataset( 'peakTotalIntensity', data=data_I ) 
 
 # load some images
 #imgs = np.load('streak_igms_PINK.h5py.npy' )
