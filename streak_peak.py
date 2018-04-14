@@ -205,10 +205,11 @@ class SubImage:
                             int(bounds['fast'][1] - \
                                 bounds['fast'][0] )
             self.radius = radius
+            self.subimg_corner = np.array( [ bounds['slow'][0], bounds['fast'][0] ] )
         else:
             self.peak = None
             self.radius = None 
-
+            self.corner = None
         Y,X = np.indices( img.shape)
         self.pix_pts = np.array( zip(X.ravel(), 
             Y.ravel() ) )
@@ -244,15 +245,15 @@ class SubImage:
         paths = [ plt.mpl.path.Path(v) 
                 for v in verts ]
         
-        self.streak_centers = [ [edge['x_center'], \
-            edge['y_center']] for edge in edges ]
+        self.streak_centers = [ [edge['y_center'], \
+            edge['x_center']] for edge in edges ]
         
         self.circularity = [   edge['shape_factor'] 
             for edge in edges]
         self.roundness = [ edge['radius_deviation'] 
             for edge in edges]
         self.areas = [ edge['area'] for edge in edges]
-       
+        
         contains = np.vstack( [ p.contains_points(self.pix_pts) 
             for p in paths ])
         self.streak_masks = [ c.reshape( self.img.shape) 
@@ -322,16 +323,6 @@ class SubImage:
             self.integrate_blind(bg,noise)
             return
 
-        #u_labs = np.arange( 1, 1+n)
-        #lab_pos =  np.array( [ np.vstack( np.where( \
-        #    regions==l) ) .T.mean(0) 
-        #        for l in u_labs] )    
-        #lab_pos = center_of_mass( ~self.mask, 
-        #    regions, u_labs) 
-
-        #lab_dists = np.sqrt( np.sum( \
-        #    (lab_pos - np.array( self.rel_peak))**2, 1) )
-        
         lab_pos = np.array( self.streak_centers)
         lab_dists = np.sqrt( np.sum( \
             (lab_pos - np.array( self.rel_peak) )**2,1) )
@@ -341,10 +332,12 @@ class SubImage:
         self.area = self.areas[idx]
         self.round = self.roundness[idx]
         self.circ = self.circularity[idx]
+        self.streak_COM = self.streak_centers[idx] + np.array( self.subimg_corner)
         #self.dist2 = lab_dists2[idx]
 
         #cent_region = u_labs[ np.argmin( lab_dists)] # +1
         peak_dist = lab_dists.min()
+        self.lab_dist = peak_dist #lab_dists.min()
         if peak_dist > dist_cut:
             self.integrate_blind(bg,noise)
             return 
@@ -362,7 +355,6 @@ class SubImage:
         self.bg = bg
         self.sigma = noise
         self.N_connected = connect
-        self.lab_dist = peak_dist #lab_dists.min()
         self.has_signal = True
         self.used_gauss=False
     
@@ -405,11 +397,10 @@ class SubImage:
         self.bg = bg
         self.sigma = s
         self.N_connected = np.nan
-        self.lab_dist = np.nan
         self.area = np.nan
         self.round = np.nan
         self.circ = np.nan
-
+        self.streak_COM = self.peak #np.nan
 
 
 def gen_from_df(df):
