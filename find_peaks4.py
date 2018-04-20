@@ -18,6 +18,9 @@ import os
 
 #out = find_peaks4.pk_pos3( I[0]*mask, make_sparse=True, nsigs=3., sig_G=0.5,sig_G2=0.3,  thresh=1, sz=7,dist_cut=2,  min_snr=10, filt=False,filt2=True, min_dist=6, r_in=375, cent=cent, subs=False,  R=R, rbins=linspace(R.min(), R.max(), 150), run_rad_med=True, peak_COM=True, median_img=Imed, median_sub=True)
 
+#find_peaks4.plot_pks( I[1]*mask, make_sparse=True, nsigs=2.5, sig_G=0.3, sig_G2=0.1,  thresh=1, sz=8,dist_cut=2, filt=False,filt2=True, min_dist=6, r_in=375, cent=cent, ret_subs=False,  R=R, rbins=linspace(R.min(), R.max(), 150), run_rad_med=False, peak_COM=False, median_img=mask*Imed, median_sub=True);ax=gca();im=ax.images[0];im.set_clim(20,600)
+
+
 import streak_peak
 
 def plot_pks( img, pk=None, ret_sub=False, **kwargs):
