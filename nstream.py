@@ -96,27 +96,28 @@ pred_header = ['%4s'%'h', '%4s'%'k', '%4s'%'l',
 
 #######################################
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-input_pkl = "result_orig"
+input_pkl = "int2.opq.pre.pkl"
+#input_pkl = "int.opq2.pre.pkl"
 #input_pkl = "small_refine.pred.pkl"
 #input_pkl = "shuffle_surprise.pkl"
 #pkl_pref = "omg-shit-2"
-pkl_pref = "small.refine.good.pred"
+pkl_pref = "opq"
 #output_str = "small.refine.good.pred.int.stream"
-output_str = "result_orig.stream"
+output_str = "cut2_opq"
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #######################################
 
 df = pandas.read_pickle(input_pkl) #,sep='\t')
 df = df.fillna(0)
-df=df.reset_index()
+df=df.reset_index(drop=True)
 pred = df.groupby( ('cxi_fname', 'dataset_index'))
 
 df1 = pandas.read_pickle("%s.cell.pkl"%pkl_pref)
-df1=df1.reset_index()
+df1=df1.reset_index(drop=True)
 cell = df1.groupby( ('cxi_fname', 'dataset_index'))
 
 df2 = pandas.read_pickle("%s.known.pkl"%pkl_pref)
-df2=df2.reset_index()
+df2=df2.reset_index(drop=True)
 found = df2.groupby( ('cxi_fname', 'dataset_index'))
 
 
@@ -156,7 +157,10 @@ for (fname, event), index in  pred.groups.items():
         o.write(S%tuple(row))
     
     o.write('End of peak list\n')
-    
+    astar1,astar2,astar3 = cell_dat['astar1'], cell_dat['astar2'], cell_dat['astar3']
+    if len(astar1) > 1:
+        o.write('----- End chunk -----\n')
+        continue 
     o.write("--- Begin crystal\n")
     a,b,c,al,be,ga = cell_dat[  [ 'a','b','c','alpha','beta','gamma' ] ].values[0]
     o.write('Cell parameters %.5f %.5f %.5f nm, %.5f %.5f %.5f deg\n'% ( a*.1,b*.1,c*.1,al,be,ga ) )
@@ -164,7 +168,8 @@ for (fname, event), index in  pred.groups.items():
     astar1,astar2,astar3 = cell_dat['astar1'], cell_dat['astar2'], cell_dat['astar3']
     bstar1,bstar2,bstar3 = cell_dat['bstar1'], cell_dat['bstar2'], cell_dat['bstar3']
     cstar1,cstar2,cstar3 = cell_dat['cstar1'], cell_dat['cstar2'], cell_dat['cstar3']
-    
+   
+    print astar1 
     o.write('astar = %+.7f %+.7f %+.7f nm^-1\n' %(astar1*10, astar2*10, astar3*10))
     o.write('bstar = %+.7f %+.7f %+.7f nm^-1\n' %(bstar1*10, bstar2*10, bstar3*10))
     o.write('cstar = %+.7f %+.7f %+.7f nm^-1\n' %(cstar1*10, cstar2*10, cstar3*10))

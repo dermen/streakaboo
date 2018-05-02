@@ -9,10 +9,13 @@ def get_im( fname, ind):
     img = h['data'][ind]
     return img
 
-input_pkl = "small.refine.good.pred.pred.pkl" # known.pkl
+input_pkl = sys.argv[1] #"small.refine.good.pred.pred.pkl" # known.pkl
 #input_pkl = "omg-shit-2.pred.pkl" # known.pkl
-output_pkl = "result_orig" #output_temp.tsv
-mask_f = "Mar_a2a_newmask.npy" 
+output_pkl = sys.argv[2] #"result_orig" #output_temp.tsv
+#mask_f = "Mar_a2a_newmask.npy" 
+try_gauss=False
+
+mask_f = "airplane_mask.npy" 
 mask = np.load(mask_f)
 
 df = pandas.read_pickle(input_pkl)
@@ -34,7 +37,6 @@ par = {'area_cut':1.2,
 
 df.reset_index(inplace=True)
 gb = df.groupby(('cxi_fname', 'dataset_index'))
-
 
 print list( df ) 
 NN = len( gb.groups)
@@ -82,7 +84,7 @@ for (fname,ev), index in gb.groups.items():
     for i_s, s in enumerate(S.sub_imgs):
         if i_s%50==0:
             print("fname %d , sub img %d / %d" %( count ,i_s, NN) )
-        s.integrate_pred_streak(**par)
+        s.integrate_pred_streak(dist_cut=2, try_gauss=try_gauss,**par)
         BG.append( s.bg)
         I.append( s.counts )
         sigI.append( s.sigma)
