@@ -25,7 +25,7 @@ import streak_peak
 
 def plot_pks( img, pk=None, ret_sub=False, **kwargs):
     if pk is None:
-        pk,I = pk_pos3( img,**kwargs) 
+        pk,I = pk_pos3(img,**kwargs) 
     m = img[ img > 0].mean()
     s = img[img > 0].std()
     plt.imshow( img, vmax=m+5*s, vmin=m-s, cmap='viridis', aspect='equal', interpolation='nearest')
@@ -203,9 +203,13 @@ def pk_pos3( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
         pos = measurements.center_of_mass( img, lab_img , np.arange( nlab)+1 )
         intens = measurements.maximum( img, lab_img, np.arange( nlab)+1) 
     else:
-        pos = [ ( int((y.start + y.stop) /2.), int((x.start+x.stop)/2.)) for y,x in locs ]
-        pos = [ p for p in pos if img[ p[0], p[1] ] > thresh]
-        intens = [ img[ int(p[0]), int(p[1])] for p in pos ]
+        print("using max position")
+        pos = measurements.maximum_position( img, lab_img , np.arange( nlab)+1 )
+        intens = measurements.maximum( img, lab_img, np.arange( nlab)+1) 
+        
+        #pos = [ ( int((y.start + y.stop) /2.), int((x.start+x.stop)/2.)) for y,x in locs ]
+        #pos = [ p for p in pos if img[ p[0], p[1] ] > thresh]
+        #intens = [ img[ int(p[0]), int(p[1])] for p in pos ]
 
     if r_in is not None or r_out is not None:
         assert( cent is not None)
@@ -299,8 +303,9 @@ def pk_pos3( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
             diffs = np.sqrt( (pts-BG)**2) #noise = (pts[:10]-BG).std()
             
             diffs_med = np.median( diffs)
+            if diffs_med==0:
+                continue
             snr = 0.6745 * I / diffs_med
-            print snr
             if snr< min_snr:
                 continue
             
@@ -320,10 +325,6 @@ def pk_pos3( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
         return pos, intens, subs
     else:
         return pos, intens
-
-
-
-
 
 
 def pk_pos( img_, make_sparse=False, nsigs=7, sig_G=None, thresh=1, min_dist=None):
