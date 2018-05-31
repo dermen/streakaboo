@@ -34,9 +34,6 @@ def fit_gauss( peak_pro, xdata, width ):
 
 
 
-
-
-
 class Imgs_from_dataframe:
     def __init__(self, df ):
         fnames = df.cxi_fname.unique()
@@ -311,6 +308,7 @@ class SubImage:
     def integrate_pred_streak( self, 
             sig_G=None, 
             dist_cut=np.inf, 
+            try_gauss=True,
             **kwargs):
         
         #assert( self.peak is not None and \
@@ -339,7 +337,10 @@ class SubImage:
         peak_dist = lab_dists.min()
         self.lab_dist = peak_dist #lab_dists.min()
         if peak_dist > dist_cut:
-            self.integrate_blind(bg,noise)
+            if try_gauss:
+                self.integrate_blind(bg,noise)
+            else:
+                self.integrate_blind2(bg,noise)
             return 
         residual = self.img - bg
         
@@ -347,8 +348,10 @@ class SubImage:
         #if min_conn < connect < max_conn:
         #else:
         #    counts = np.nan
+        
         self.sig_mask = (cent_region_ma)*self.pixmask
         self.sig_pix = residual[self.sig_mask]
+        
         #counts = residual[ regions==cent_region].sum()
         #self.counts = self.sig_pix.sum()
         self.counts = self.sig_pix.sum() #mean()
@@ -358,7 +361,7 @@ class SubImage:
         self.has_signal = True
         self.used_gauss=False
     
-    def integrate_blind(self, bg, noise, nbins=20, thresh=2.):
+    def integrate_blind(self, bg, noise, nbins=20, thresh=2., use_gauss=False):
         
         residual = self.img-bg
         
@@ -402,6 +405,27 @@ class SubImage:
         self.circ = np.nan
         self.streak_COM = self.peak #np.nan
 
+    def integrate_blind2(self, bg, noise):
+        
+        residual = self.img-bg
+        
+        self.sig_mask = self.blind_region * \
+            self.mask*self.pixmask
+
+        self.sig_pix =  residual[self.sig_mask]
+        self.counts = self.sig_pix.mean()
+        #if self.counts < 0:
+        #    self.counts = 0
+        self.bg = bg
+        self.sigma = noise
+        self.N_connected = np.nan
+        self.lab_dist = np.nan
+        self.area = np.nan
+        self.round = np.nan
+        self.circ= np.nan
+        self.streak_COM = self.peak
+        self.has_signal=True
+        self.used_gauss=False
 
 def gen_from_df(df):
     gb = df.groupby('cxi_fname')

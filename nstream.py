@@ -1,3 +1,4 @@
+import sys
 import pandas
 import os
 import numpy as np
@@ -96,14 +97,16 @@ pred_header = ['%4s'%'h', '%4s'%'k', '%4s'%'l',
 
 #######################################
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-input_pkl = "int2.opq.pre.pkl"
+#input_pkl = "int2.opq.pre.pkl"
+#input_pkl = "int3_nogauss.opq2.pre.pkl"
+input_pkl = sys.argv[1] #"int3_nogauss.opq2.pre.pkl"
 #input_pkl = "int.opq2.pre.pkl"
 #input_pkl = "small_refine.pred.pkl"
 #input_pkl = "shuffle_surprise.pkl"
 #pkl_pref = "omg-shit-2"
-pkl_pref = "opq"
+pkl_pref = "opq2"
 #output_str = "small.refine.good.pred.int.stream"
-output_str = "cut2_opq"
+output_str = sys.argv[2] #"result_int3_nogauss.opq2.stream"
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #######################################
 
@@ -114,10 +117,12 @@ pred = df.groupby( ('cxi_fname', 'dataset_index'))
 
 df1 = pandas.read_pickle("%s.cell.pkl"%pkl_pref)
 df1=df1.reset_index(drop=True)
+#df1.cxi_fname = [ os.path.basename( f) for f in df1.cxi_fname]
 cell = df1.groupby( ('cxi_fname', 'dataset_index'))
 
 df2 = pandas.read_pickle("%s.known.pkl"%pkl_pref)
 df2=df2.reset_index(drop=True)
+#df2.cxi_fname = [ os.path.basename( f) for f in df2.cxi_fname]
 found = df2.groupby( ('cxi_fname', 'dataset_index'))
 
 
@@ -133,7 +138,6 @@ o.write(head)
 counter = 0
 for (fname, event), index in  pred.groups.items():
     print (counter)
-    
     found_dat = found.get_group( ( fname, event) )[ ['fs/px', 'ss/px', '(1/d)/nm^-1', 'Intensity', 'Panel'] ]
     cell_dat = cell.get_group( ( fname, event) )
 
