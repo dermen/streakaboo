@@ -300,7 +300,6 @@ def pk_pos3( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
             
             diffs_med = np.median( diffs)
             snr = 0.6745 * I / diffs_med
-            print snr
             if snr< min_snr:
                 continue
             
