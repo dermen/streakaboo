@@ -14,13 +14,6 @@ import sys
 from joblib import Parallel, delayed
 import os
 
-#find_peaks4.plot_pks( I[2000]*mask, make_sparse=True, nsigs=2.5, sig_G=0.3,sig_G2=0.1,  thresh=1, sz=8,dist_cut=2, filt=False,filt2=True, min_dist=6, r_in=375, cent=cent, ret_subs=False,  R=R, rbins=linspace(R.min(), R.max(), 150), run_rad_med=True, peak_COM=True, median_img=mask*Imed, median_sub=False,)
-
-#out = find_peaks4.pk_pos3( I[0]*mask, make_sparse=True, nsigs=3., sig_G=0.5,sig_G2=0.3,  thresh=1, sz=7,dist_cut=2,  min_snr=10, filt=False,filt2=True, min_dist=6, r_in=375, cent=cent, subs=False,  R=R, rbins=linspace(R.min(), R.max(), 150), run_rad_med=True, peak_COM=True, median_img=Imed, median_sub=True)
-
-#find_peaks4.plot_pks( I[1]*mask, make_sparse=True, nsigs=2.5, sig_G=0.3, sig_G2=0.1,  thresh=1, sz=8,dist_cut=2, filt=False,filt2=True, min_dist=6, r_in=375, cent=cent, ret_subs=False,  R=R, rbins=linspace(R.min(), R.max(), 150), run_rad_med=False, peak_COM=False, median_img=mask*Imed, median_sub=True);ax=gca();im=ax.images[0];im.set_clim(20,600)
-
-
 import streak_peak
 
 def plot_pks( img, pk=None, ret_sub=False, **kwargs):
@@ -86,6 +79,7 @@ def detect_peaks(image):
 
 def pk_pos2( img_, make_sparse=False, nsigs=7, sig_G=None, thresh=1, sz=4, min_snr=2.,
     min_conn=2, max_conn=20, filt=False, min_dist=0):
+    sz = int(sz)
     if make_sparse:
         img = img_.copy() #[sz:-sz,sz:-sz].copy()
         m = img[ img > 0].mean()
@@ -187,6 +181,8 @@ def pk_pos3( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
     min_conn=2, max_conn=20, filt=False, min_dist=0, r_in=None, r_out=None,filt2=False,
     mask=None, cent=None, ret_subs=False, R=None, rbins=None, run_rad_med=False, peak_COM=False,
     median_sub=False, median_img = None, sig_G2=0.1, dist_cut=2.):
+   
+    sz = int(sz)
     img = img_.copy()
     if run_rad_med:
         img = rad_med( img, R, rbins, nsigs)
@@ -207,6 +203,9 @@ def pk_pos3( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
         pos = measurements.maximum_position( img, lab_img , np.arange( nlab)+1 )
         intens = measurements.maximum( img, lab_img, np.arange( nlab)+1) 
         
+    good = [ i for i,p in enumerate(pos) if intens[i] > thresh]
+    pos = [ pos[i] for i in good]
+    intens = [ intens[i] for   i in good]
         #pos = [ ( int((y.start + y.stop) /2.), int((x.start+x.stop)/2.)) for y,x in locs ]
         #pos = [ p for p in pos if img[ p[0], p[1] ] > thresh]
         #intens = [ img[ int(p[0]), int(p[1])] for p in pos ]
@@ -217,16 +216,26 @@ def pk_pos3( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
         x = np.array([ p[1] for p in pos ]).astype(float)
         r = np.sqrt( (y-cent[1])**2 + (x-cent[0])**2)
         
-        if r_in is not None:
-            inds_in = np.where( r < r_in )[0]
-        else:
-            inds_in = np.array([])
-        if r_out is not None:
-            inds_out = np.where( r > r_out)[0]
-        else:
-            inds_out = np.array([])
+        if r_in is not None and r_out is not None:
+            
+            if r_in > r_out:
+                inds = np.logical_and( r > r_out,  r < r_in)
+                inds = np.where( inds)[0]
+            else:
+                inds = np.logical_or( r > r_out, r < r_in)
+                inds = np.where( inds)[0]
         
-        inds = np.unique( np.hstack((inds_in, inds_out))).astype(int)
+        elif r_in is not None and r_out is None:
+            inds = np.where( r < r_in )[0]
+        #else:
+        #    inds_in = np.array([])
+        
+        elif r_out is not None and r_in is None:
+            inds = np.where( r > r_out)[0]
+        #else:
+        #    inds_out = np.array([])
+        
+        #inds = np.unique( np.hstack((inds_in, inds_out))).astype(int)
         if inds.size:
             pos = [pos[i] for i in inds]
             intens = [intens[i] for i in inds]  

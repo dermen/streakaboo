@@ -12,6 +12,22 @@ from scipy.ndimage.filters import gaussian_filter as gauss_filt
 
 from astride import Streak
 
+from loki.utils.postproc_helper import is_outlier
+
+def subimg_outlier(img, zscore=2 ):
+    outs = is_outlier( img.ravel(), zscore)
+    outs = outs.reshape ( img.shape)
+    BG = (~outs) * img
+    Y,X = np.indices( img.shape)
+    YY,XX = Y.ravel(), X.ravel()
+
+    x,y,z = X[~outs], Y[~outs], img[~outs]
+    guess = array([np.ones_like(x), x, y ] ) .T
+    coeff, r, rank, s = np.linalg.lstsq(guess, z)
+    ev = (coeff[0] + coeff[1]*XX + coeff[2]*YY )
+    return ev.reshape( img.shape)
+
+    
 
 def gauss(x, *p):
     A, mu, sigma = p
