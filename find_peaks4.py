@@ -18,7 +18,7 @@ import streak_peak
 
 def plot_pks( img, pk=None, ret_sub=False, **kwargs):
     if pk is None:
-        pk,I = pk_pos3(img,**kwargs) 
+        pk,I = pk_pos4(img,**kwargs) 
     m = img[ img > 0].mean()
     s = img[img > 0].std()
     plt.imshow( img, vmax=m+5*s, vmin=m-s, cmap='viridis', aspect='equal', interpolation='nearest')
@@ -837,4 +837,103 @@ def make_cxi_file4( img_gen, outname, Hsh,
     else:
         np.savetxt(outname.replace(".cxi",".txt"), hit_fnames, "%s")
     return all_pk, all_pk_intens
+
+def pk_pos4( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_snr=2.,
+    min_conn=-1, max_conn=np.inf, filt=False, min_dist=0, r_in=None, r_out=None,
+    mask=None, cent=None, R=None, rbins=None, run_rad_med=False, peak_COM=False,
+    median_sub=False, median_img = None, dist_cut=2.):
+   
+    sz = int(sz)
+    img = img_.copy()
+    if run_rad_med:
+        img = rad_med( img, R, rbins, nsigs)
+    else:
+        m = img[ img > 0].mean()
+        s = img[ img > 0].std()
+        img[ img < m + nsigs*s] = 0
+    
+    if sig_G is not None:
+        img = gaussian_filter( img, sig_G)
+    lab_img, nlab = measurements.label(detect_peaks(img))
+    locs = measurements.find_objects(lab_img)
+    
+    if peak_COM:
+        pos = measurements.center_of_mass( img, lab_img , np.arange( nlab)+1 )
+        intens = measurements.maximum( img, lab_img, np.arange( nlab)+1) 
+    else:
+        pos = measurements.maximum_position( img, lab_img , np.arange( nlab)+1 )
+        intens = measurements.maximum( img, lab_img, np.arange( nlab)+1) 
+        
+    good = [ i for i,p in enumerate(pos) if intens[i] > thresh]
+    pos = [ pos[i] for i in good]
+    intens = [ intens[i] for   i in good]
+
+    if r_in is not None or r_out is not None:
+        assert( cent is not None)
+        y = np.array([ p[0] for p in pos ]).astype(float)
+        x = np.array([ p[1] for p in pos ]).astype(float)
+        r = np.sqrt( (y-cent[1])**2 + (x-cent[0])**2)
+        
+        if r_in is not None and r_out is not None:
+            
+            if r_in > r_out:
+                inds = np.logical_and( r > r_out,  r < r_in)
+                inds = np.where( inds)[0]
+            else:
+                inds = np.logical_or( r > r_out, r < r_in)
+                inds = np.where( inds)[0]
+        
+        elif r_in is not None and r_out is None:
+            inds = np.where( r < r_in )[0]
+        
+        elif r_out is not None and r_in is None:
+            inds = np.where( r > r_out)[0]
+        
+        if inds.size:
+            pos = [pos[i] for i in inds]
+            intens = [intens[i] for i in inds]  
+        else:
+            return [],[]
+    
+    npeaks =len(pos)
+    if min_dist and npeaks>1:
+        YXI = np.hstack( (pos, np.array(intens)[:,None]))
+        K = cKDTree( YXI[:,:2])        
+        pairs = np.array(list( K.query_pairs( min_dist)))
+        while pairs.size:
+            smaller = YXI[:,2][pairs].argmin(1)
+            inds = np.unique( [ pairs[i][l] for i,l in enumerate(smaller)] )
+            YXI = np.delete(YXI, inds, axis=0)
+            K = cKDTree( YXI[:,:2]  )
+            pairs = np.array(list( K.query_pairs( min_dist)))
+
+        pos = YXI[:,:2]
+        intens = YXI[:,2]
+
+    if filt:
+        new_pos = []
+        new_intens =  []
+        ypos,xpos = map( np.array, zip(*pos) )
+        SubImg = streak_peak.SubImages(img_.copy(), ypos,  
+            xpos, sz=sz,mask=mask, cent=cent)
+        
+        for i_s, s in enumerate(SubImg.sub_imgs):
+            if not s.img.size: # NOTE: do I still need this??
+                continue
+            nconn = streak_peak.get_nconn_snr_img(s,min_snr)
+            #SubProc = streak_peak.SubImageProcess(s)
+
+            #nconn = SubProc.get_nconnect_cent(zscore_sig=min_snr)
+            if nconn < min_conn:
+                continue
+            if nconn > max_conn:
+                continue
+
+            new_pos.append( pos[i_s] )
+            new_intens.append( intens[ i_s] )
+        
+        pos = new_pos
+        intens = new_intens
+    
+    return pos, intens
 

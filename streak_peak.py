@@ -3,6 +3,7 @@ import numpy as np
 import pylab as plt
 import h5py
 from itertools import izip
+from scipy.ndimage.morphology import generate_binary_structure
 from scipy.ndimage.filters import gaussian_filter
 from scipy.ndimage.measurements import label
 from scipy.ndimage.measurements import center_of_mass
@@ -14,7 +15,87 @@ from astride import Streak
 
 from loki.utils.postproc_helper import is_outlier
 
-def subimg_outlier(img, zscore=2 ):
+class SubImageProcess:
+    def __init__( self, sub_img):
+        self.sub_img = sub_img
+        self.img = self.sub_img.img
+    
+    def _get_BG_pixels(self, zscore):
+        outs = is_outlier( self.img.ravel(), zscore)
+        outs = outs.reshape ( self.img.shape)
+        self.BG_mask = ~outs
+        BG = (~outs) * self.img
+        self.BG_pixels = BG
+        
+        self.bg_value = self.img[~outs].mean()
+        self.sigma_value = self.img[~outs].std()
+
+        #return self.BG_pixels
+        
+    def set_tilt_plane(self, zscore) :
+        #outs = is_outlier( self.img.ravel(), zscore)
+        #outs = outs.reshape ( self.img.shape)
+        #BG = (~outs) * self.img
+        self._get_BG_pixels(zscore)
+        
+        Y,X = np.indices(self.img.shape)
+        YY,XX = Y.ravel(), X.ravel()
+
+        x,y,z = X[self.BG_mask], Y[self.BG_mask], \
+            self.img[self.BG_mask]
+        guess = np.array([np.ones_like(x), x, y ] ) .T
+        coeff, r, rank, s = np.linalg.lstsq(guess, z)
+        ev = (coeff[0] + coeff[1]*XX + coeff[2]*YY )
+        self.tilt_plane = ev.reshape( self.img.shape)
+
+    def get_subtracted_img(self, zscore):
+        self.set_tilt_plane(zscore)
+        return self.img - self.tilt_plane
+        
+    def get_residual_outlier_img(self, zscore_bg, zscore_sig):
+        sub_img = self.get_subtracted_img( zscore_bg)
+        outs = is_outlier(sub_img.ravel(), zscore_sig)
+        outs = outs.reshape( self.img.shape)
+        return outs
+
+    def get_nconnect_cent(self, zscore_bg=2, zscore_sig=3):
+        resid = self.get_residual_outlier_img(zscore_bg, \
+            zscore_sig)
+        lab,nlab = label(resid)
+        if lab[self.sub_img.rel_peak] == 0:
+            return 0
+        nconn = np.sum( lab == lab[self.sub_img.rel_peak]  )
+        return nconn
+
+
+def get_nconn_snr_img( sub_img, min_snr, zscore_bg=2, 
+        structure=None):
+    
+    if structure is None:
+        structure = generate_binary_structure( 2,2)
+
+    snr_img = get_snr_img( sub_img, min_snr, zscore_bg)
+    
+    lab,nlab = label(snr_img, structure=structure)
+    if lab[sub_img.rel_peak] == 0:
+        return  0
+    nconn = np.sum( lab == lab[sub_img.rel_peak]  )
+    return nconn
+
+def get_snr_img( sub_img, min_snr, zscore_bg=2):
+    sp = SubImageProcess( sub_img)
+    resid = sp.get_subtracted_img( zscore_bg )
+    noise = np.sqrt( resid[ sp.BG_mask].std()**2 \
+        + resid[ ~sp.BG_mask].std() **2 )
+    snr_img =  (resid / noise) * (~sp.BG_mask)
+    return snr_img >= min_snr
+
+def get_nconnect_cent( sub_img, zscore_bg, zscore_sig):
+    sp = SubImageProcess( sub_img)
+    return sp.get_nconnect_cent( zscore_bg, zscore_sig)
+
+
+def tilting_plane(img, zscore=2 ):
     outs = is_outlier( img.ravel(), zscore)
     outs = outs.reshape ( img.shape)
     BG = (~outs) * img
@@ -26,8 +107,6 @@ def subimg_outlier(img, zscore=2 ):
     coeff, r, rank, s = np.linalg.lstsq(guess, z)
     ev = (coeff[0] + coeff[1]*XX + coeff[2]*YY )
     return ev.reshape( img.shape)
-
-    
 
 def gauss(x, *p):
     A, mu, sigma = p
@@ -47,8 +126,6 @@ def fit_gauss( peak_pro, xdata, width ):
     except RuntimeError: 
         return None
     return fit, success,gauss(xdata, *fit)
-
-
 
 class Imgs_from_dataframe:
     def __init__(self, df ):
@@ -73,7 +150,6 @@ class Imgs_from_dataframe:
         file_i = self.I[i]['file_i']
         shot_i = self.I[i]['shot_i']
         return self.h5s[file_i][self.data_path][shot_i]
-
 
 class multi_h5s_img:
     def __init__(self, fnames, data_path):
@@ -138,7 +214,6 @@ class multi_h5s_peaks:
         npeaks = self.I[i]['npeaks']
         return self.h5s[file_i][self.path][shot_i][:npeaks]
 
-
 ########
 # process
 class SubImages:
@@ -198,8 +273,6 @@ class SubImages:
     def integrate_preds(self, **kwargs):
         for s in self.sub_imgs:
             s.integrate_pred_streak(**kwargs)
-
-
 
 class SubImage:
     def __init__(self, img, bounds=None, radius=None, 
@@ -574,8 +647,6 @@ def next_subs(im,y,x, sub_sz=10):
     subs = make_sub_imgs( im, pk, sub_sz )
     return subs
 
-
-
 def write_cxi_peaks( h5, peaks_path, pkX, pkY, pkI, data_inds):
     
     npeaks = np.array( [len(x) for x in pkX] )
@@ -598,11 +669,6 @@ def write_cxi_peaks( h5, peaks_path, pkX, pkY, pkI, data_inds):
     peaks.create_dataset( 'peakYPosRaw', data=data_y )
     peaks.create_dataset( 'peakTotalIntensity', data=data_I ) 
 
-# load some images
-#imgs = np.load('streak_igms_PINK.h5py.npy' )
-#x,y,I = np.load('streak_peaks_PINK.h5py.npy')
-#fnames = glob.glob("/Users/damende/mar_a2a/11bunch*.cxi")
-#fnames = glob.glob("/ufo2/phyco/*.cxi")
 def main():
     pkimgs = multi_h5s_img( fnames, "data")
     pkX = multi_h5s_peaks( fnames, "peaks/peakXPosRaw", "peaks")
@@ -617,11 +683,6 @@ def main():
     subs = next_subs( pkimgs[0], pkY[0], pkX[0], sub_sz=15 ) 
     Y,X = np.indices( img_sh)
     pix_pts = np.array( zip(X.ravel(), Y.ravel() ) )
-
-#all_pk = []
-#for i in inds:
-#    all_pk.append( map( np.array , zip( y[i], x[i] ) ) )
-# len(subs) == 44
 
     nrows=6
     ncols=7
