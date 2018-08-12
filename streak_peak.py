@@ -559,8 +559,8 @@ def find_edges(img, sig_G=0, **kwargs):
     return streak.streaks
 
 def plot_streak( img, sig_G_lst=[0], **kwargs):
-    m = median( img[ img >0])
-    s = std(img[ img >0])
+    m = np.median( img[ img >0])
+    s = np.std(img[ img >0])
     imshow( img, vmax=m+4*s, vmin=m-s, cmap='viridis')
     for sig_G in sig_G_lst:
         streak = Streak(gaussian_filter(img,sig_G),
