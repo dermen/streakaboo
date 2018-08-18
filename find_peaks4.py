@@ -840,11 +840,12 @@ def make_cxi_file4( img_gen, outname, Hsh,
 
 def pk_pos4( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_snr=2.,
     min_conn=-1, max_conn=np.inf, filt=False, min_dist=0, r_in=None, r_out=None,
-    mask=None, cent=None, R=None, rbins=None, run_rad_med=False, peak_COM=False,
-    median_sub=False, median_img = None, dist_cut=2.):
-   
+    mask=None, cent=None, R=None, rbins=None, run_rad_med=False, peak_COM=False):
+
+    
     sz = int(sz)
     img = img_.copy()
+    img[ img<  thresh] = 0
     if run_rad_med:
         img = rad_med( img, R, rbins, nsigs)
     else:
@@ -868,6 +869,8 @@ def pk_pos4( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
     pos = [ pos[i] for i in good]
     intens = [ intens[i] for   i in good]
 
+    if not pos:
+        return [],[]
     if r_in is not None or r_out is not None:
         assert( cent is not None)
         y = np.array([ p[0] for p in pos ]).astype(float)
@@ -896,6 +899,8 @@ def pk_pos4( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
             return [],[]
     
     npeaks =len(pos)
+    if not pos:
+        return [],[]
     if min_dist and npeaks>1:
         YXI = np.hstack( (pos, np.array(intens)[:,None]))
         K = cKDTree( YXI[:,:2])        
@@ -909,7 +914,6 @@ def pk_pos4( img_, make_sparse=True, nsigs=7, sig_G=None, thresh=1, sz=4, min_sn
 
         pos = YXI[:,:2]
         intens = YXI[:,2]
-
     if filt:
         new_pos = []
         new_intens =  []

@@ -1,0 +1,746 @@
+#!/usr/local/opt/python/bin/python2.7
+try: 
+    import Tkinter as tk
+except ImportError:
+    import tkinter as tk
+import tkFileDialog
+
+import matplotlib as mpl
+mpl.use('TkAgg')
+import glob
+import time
+import sys
+import re
+import os
+import pandas
+import h5py
+import numpy as np
+import matplotlib as mpl
+mpl.use('TkAgg')
+from streakaboo import find_peaks4
+
+from ImageViewer import ImageViewer
+from LineViewer import LineViewer
+
+try:
+
+    from loki.RingData import RadialProfile
+    has_loki=True
+except ImportError:
+    has_loki=False
+
+btnstyle = {'font': 'Helvetica 10 bold', 
+            'activebackground': 'green', 
+            'activeforeground': 'white',
+            'relief': tk.RAISED, 'highlightcolor':'red'}  
+
+fr = {'bg': 'white', }
+frpk = {'padx': 5, 'pady': 5}
+
+#R_name = "pk_R_lcp.npy" # radius of each pixel (dist from cent) 
+R_name = "MAR_R.1920x1920.npy" # radius of each pixel (dist from cent) 
+MASK_name = "airplane_mask.1920x1920.npy" #bool mask (bad=False, good=True),same shape as img 
+cent_name = "Mar_a2a_center.1920x1920.npy" # this 
+MEDIAN_name = None #"pk_median_lcp.npy" # can set to =None is you dont have
+
+R = None #np.lod(R_name) # # can set = None if you dont have, just set run_rad_med = False...
+MASK =  np.ones(  (150, 100), bool )#None#np.load(MASK_name) #can set to np.ones( (SS_dim, FS_dim), dtype=np.bool) ) if dont have
+cent = None #np.load(cent_name) # center, can set cent= (fs_coor, ss_coor) 
+MEDIAN_IMG = None #np.ones_like( R)
+
+PK_PAR =  { 'make_sparse':True,# leave true.. 
+    'sig_G':0.,#'sig_G2':0.1,  # gaussian filter sigma (applied before local max filter, and then applied to streak detect)
+    'thresh':10,  # local max with this value pixel (ADU) will be ignored
+    'sz':10,  # sub image size used to  do local analysis
+    'min_snr': 18,  # min snr, rough compute, optimized visually for each experiment, use this when 'filt' is True
+    'filt': True, # this is my janky filtering I prob screwed it up in last commit, email me if bad... 
+    'min_dist':8, # min dist between pixels 
+    'r_in':None, # min res ring (only detect peaks within this radius
+    'r_out':None, 
+    'cent':cent,  # (fast scan, slow scan) center of pilatus
+    'R':None, # provides radius of each pixel, pre-computed... same shape as pilatus
+    'rbins':np.array([0.,225.,300.,375.,450.,525., 600.]),
+    'nsigs':4.2, # how many absolute deviations from the median should a local max be to be a peak 
+    'min_conn': -1,
+    'max_conn':999999,
+    'peak_COM':True, # if true uses center of mass (intnsity) to set peak pos, else uses 
+    'run_rad_med':False, #whether to use the median radius thresholding
+    'mask':None} #mask im
+
+
+##############
+
+class multi_h5s_img:
+    def __init__(self, fnames, data_path):
+        self.h5s = [ h5py.File(f,'r') for f in fnames]
+        self.N = sum( [h[data_path].shape[0] for h in self.h5s])
+        self.data_path = data_path
+        self._make_index()
+    def _make_index(self):
+        self.I = {}
+        count = 0
+        for i,h in enumerate(self.h5s):
+            N_data = h[self.data_path].shape[0]
+            for j in range( N_data):
+                self.I[count] = {'file_i':i, 'shot_i':j}
+                count += 1
+    def __getitem__(self,i):
+        file_i = self.I[i]['file_i']
+        shot_i = self.I[i]['shot_i']
+        return self.h5s[file_i][self.data_path][shot_i]
+
+class multi_h5s_npeaks:
+    def __init__(self, fnames, peaks_path):
+        self.h5s = [ h5py.File(f,'r') for f in fnames]
+        print self.h5s[0].filename
+        print self.h5s[0].keys()
+        #print self.h5s[0][peaks_path].keys()
+        self.N = sum( [h['%s/nPeaks'%peaks_path].shape[0] 
+            for h in self.h5s])
+        self.peaks_path = peaks_path
+        self._make_index()
+    def _make_index(self):
+        self.I = {}
+        count = 0
+        for i,h in enumerate(self.h5s):
+            N_data = h['%s/nPeaks'%self.peaks_path].shape[0]
+            for j in range( N_data):
+                self.I[count] = {'file_i':i, 'shot_i':j}
+                count += 1
+    def __getitem__(self,i):
+        file_i = self.I[i]['file_i']
+        shot_i = self.I[i]['shot_i']
+        return self.h5s[file_i]['%s/nPeaks'%self.peaks_path][shot_i]
+
+class multi_h5s_peaks:
+    def __init__(self, fnames, path, peaks_path):
+        self.h5s = [ h5py.File(f,'r') for f in fnames]
+        self.N = sum( [h['%s/nPeaks'%peaks_path].shape[0] 
+            for h in self.h5s])
+        self.path = path
+        self.peaks_path = peaks_path
+        self._make_index()
+    def _make_index(self):
+        self.I = {}
+        count = 0
+        for i,h in enumerate(self.h5s):
+            N_data = h['%s/nPeaks'%self.peaks_path].shape[0]
+            for j in range( N_data):
+                self.I[count] = {'file_i':i, 'shot_i':j}
+                count += 1
+    def __getitem__(self,i):
+        file_i = self.I[i]['file_i']
+        shot_i = self.I[i]['shot_i']
+        return self.h5s[file_i][self.path][shot_i]
+
+class ModelApp(tk.Frame):
+    def __init__(self, master, cxi_fname, image_path, peaks_path, circ_color='Limegreen',
+                    *args, **kwargs):
+        
+        tk.Frame.__init__(self, *args, **kwargs)
+        self.master = master
+
+
+        self.MASK=None
+        #self.R = None
+
+        self.viewing_radpro=False
+        
+        self.circ_color=circ_color
+        self.fnames = glob.glob(cxi_fname) 
+        self.imgs =  multi_h5s_img( self.fnames, image_path)
+        
+        self.Num_peaks = 0
+
+        self.indices = np.arange( self.imgs.N)
+        self.counter = 0
+
+        self._set_idx_fname_path()
+        self.inputs()
+
+        self._set_image(first=True)
+        
+        self.xl = (None, None)
+        self.yl = (None, None)
+        
+        self._mask_loader()
+        #self._R_loader()
+        
+        self.CENT = (self.img.shape[1]/2., self.img.shape[0]/2.)
+        self._set_R()
+        
+        print (self.R)
+        self._detector_center_widgets()
+
+
+        self._set_info_panel()
+        
+        self._set_radpro_maker()
+        self._make_radpro_button()
+
+        self._set_centers()
+        
+        self._set_radial_bin_widgets()
+
+        self._buttons()
+        self._display()
+
+
+    def _set_radial_bins(self):
+        
+        radial_bin_str = self.radial_bin_var.get()
+        
+        try:
+            self.radial_bins =  map( float, radial_bin_str.split(',') )
+        except:
+            launch_warning("Something wrong with the radial bin string!")
+            PK_PAR["rbins"] = None
+            return
+        
+        if not self.radial_bins == sorted( self.radial_bins):
+            launch_warning( "Radial bins are not sorted!")
+            PK_PAR["rbins"] = None
+            return
+
+        self.radial_bins = [r for r in self.radial_bins if r <= self.R.max() ] 
+
+        if 0 not in self.radial_bins:
+            self.radial_bins = [0] + self.radial_bins
+        
+        if self.R.max() not in self.radial_bins:
+            self.radial_bins.append( self.R.max() )
+
+        self.radial_bins_lab.config(text=str( map( lambda x: int(x), self.radial_bins)))
+        
+        PK_PAR["rbins"] = np.array( self.radial_bins ) 
+
+        
+        if self.display_radial_bins_var.get():
+            self._display_radial_bins()
+
+
+
+    def _display_radial_bins( self, ):
+        for r in self.radial_bins:
+            circ = mpl.pyplot.Circle(xy=(self.CENT[0],self.CENT[1]), radius=r, fc='none', ec='w', ls='dashed', lw=2)
+            self.IV.ax.add_patch(circ)
+        
+        self.IV.canvas.draw()
+
+    def _set_radial_bin_widgets(self):
+        fr = tk.Frame( self.top)
+        fr.pack(side=tk.TOP, expand=tk.YES, fill=tk.BOTH)
+        some_text = """List of radial bin dividers for doing radial median subtraction. \nEnter a comma separated string e.g.  '0,400,600'"""
+        tk.Label(fr, text=some_text, justify=tk.LEFT) .grid( row=0, column=0, columnspan=3)
+        
+        self.radial_bin_var = tk.StringVar()
+        tk.Entry( fr, textvariable=self.radial_bin_var, ).grid(row=1, column=0)
+        tk.Button( fr, text="Set radial bins", command=self._set_radial_bins, ).grid( row=1, column=1, sticky=tk.W)
+        self.radial_bins_lab = tk.Label( fr, text="...")
+        self.radial_bins_lab.grid( row=1, column=2, sticky=tk.W)
+
+        
+        self.display_radial_bins_var = tk.IntVar()
+        tk.Checkbutton( fr, text="Display radial bins" , variable=self.display_radial_bins_var)\
+            .grid( row=2, column=0, columnspan=3)
+        self.display_radial_bins_var.set(0) 
+
+    def _make_radpro_button(self):
+        fr = tk.Frame( self.top)
+        fr.pack(side=tk.TOP, expand=tk.YES)
+        self.radpro_var = tk.IntVar()
+        
+        self.radpro_button = tk.Button(fr, text="Display radial profile", 
+            command=self._display_radpro ).pack()
+        #self.radpro_var.set(0)
+
+    def _display_radpro(self):
+        if not has_loki:
+            launch_warning("You must install LOKI before viewing radial profiles!")
+        radpro_yvals = self.radpro_maker.calculate( self.img)
+        
+        self.radpro_fr = tk.Toplevel()
+        #if self.radpro_var.get():
+        self.LV = LineViewer(
+            self.radpro_fr,
+            line_data=(self.radpro_xvals, radpro_yvals) , 
+            xlabel="pixel radius", 
+            ylabel="Average intensity")
+
+        self.LV.canvas.draw()
+        self.viewing_radpro = True
+
+    def _update_radpro(self):
+        radpro_yvals = self.radpro_maker.calculate( self.img)
+        line_data=(self.radpro_xvals, radpro_yvals)
+        self.LV.update_data( line_data)
+        self.LV.canvas.draw()
+
+    def _set_radpro_maker(self):
+        self.radpro_maker = RadialProfile( 
+            center=self.CENT,
+            img_shape = self.img.shape, 
+            mask=self.MASK, 
+            minlength=  10+ int( np.sqrt( self.img.shape[0]**2 + self.img.shape[1]**2)) ) 
+        
+        self.radpro_xvals = np.arange( self.radpro_maker.minlength )
+
+    def _set_info_panel(self):
+        fr = tk.Frame(self.geom_frame, background="blue")
+        fr.pack(side=tk.LEFT, fill=tk.BOTH, expand=tk.YES)
+        
+        color={"foreground":"orange", "background":"blue"}
+        tk.Label(fr, text="Detector information", padx=10, pady=10, **color).grid(row=0, column=0)
+        tk.Label(fr, text="Detector shape (Slow-scan,fast-scan)=%d,%d"%(self.img.shape[0], self.img.shape[1]), **color)\
+            .grid(row=1, column=0)
+        self.center_lab_text = "Detector center (Slow-scan,fast-scan)=%d,%d"
+        self.center_lab = tk.Label(fr, text=self.center_lab_text%(self.CENT[1], self.CENT[0]), **color)
+        self.center_lab.grid(row=2, column=0)
+        
+        self.npeaks_lab_text = "Number of found peaks: %d"
+        self.npeaks_lab = tk.Label(fr, text=self.npeaks_lab_text%self.Num_peaks, **color)
+        self.npeaks_lab.grid( row=3,column=0)
+
+    def _detector_center_widgets(self):
+        self.geom_frame = tk.Frame( self.top, background="black")
+        self.geom_frame.pack(side=tk.TOP, expand=tk.YES, fill=tk.BOTH)
+        
+        fr = tk.Frame(self.geom_frame, background="black")
+        fr.pack(side=tk.LEFT, expand=tk.YES, fill=tk.BOTH)
+        self.centX_var =  tk.DoubleVar()
+        self.centY_var =  tk.DoubleVar()
+        
+        color={"foreground":"green", "background":"black"}
+        tk.Label(fr, text="Set Detector center", padx=10, pady=10, **color).grid(row=0, column=0,columnspan=2 )
+        
+        ex=tk.Entry( fr, textvariable=self.centX_var, width=12)
+        ex.grid(row=1,column=0, )
+        tk.Label(fr, text="fast-scan",**color).grid(row=1, column=1,sticky=tk.W )
+        
+        ey = tk.Entry( fr, textvariable=self.centY_var,width=12 )
+        ey.grid(row=2,column=0,)
+        tk.Label(fr, text="slow-scan", **color).grid(row=2, column=1, sticky=tk.W )
+        
+        tk.Button(fr, text="Set", highlightbackground="black", \
+            command=self._set_center,).grid(row=3, column=0,columnspan=2) 
+        
+        ey.config({"bg": "black"})
+        ex.config({"bg": "black"})
+        self.centX_var.set(self.CENT[0])
+        self.centY_var.set(self.CENT[1])
+        ey.config({"fg": "green"})
+        ex.config({"fg": "green"})
+        
+    def _set_center(self):
+        X = self.centX_var.get()
+        Y = self.centY_var.get()
+        self.CENT = (X,Y)
+        self.center_lab.config(text=self.center_lab_text%(self.CENT[1], self.CENT[0]))
+        self._set_radpro_maker()
+    
+        self._set_R()
+        self._set_radial_bins()
+        
+
+    def _sel_files(self):
+        file_opt = {'filetypes': [],
+                    'initialdir': os.getcwd()}
+        filename = tkFileDialog.askopenfilename(**file_opt)
+        return filename
+
+    def _load_numpy_binary(self, obj_name):
+        npy_file = self._sel_files()
+        if not npy_file:
+            return None ,None
+        try:
+            NPY = np.load( npy_file)
+        except:
+            self.launch_warning( "%s is not a numpy binary!"%npy_file )
+            NPY = None
+        if NPY.shape != self.img.shape:
+            self.launch_warning( "Shape mis-align: %s (%d,%d) and img (%d,%d)!"%(obj_name, NPY.shape[0], 
+                NPY.shape[1], self.img.shape[0], self.img.shape[1]) )
+            NPY= None
+        return npy_file, NPY 
+    
+    def _set_mask(self):
+        self.mask_file, self.MASK = self._load_numpy_binary("MASK")
+        if has_loki: 
+            self._set_radpro_maker()
+            if self.viewing_radpro:
+                self._update_radpro()
+        self.mask_loaded_label.config(text="LOADED %s!"%self.mask_file)
+
+    def _set_R(self):
+        #self.R_file, self.R = self._load_numpy_binary("Rpixels")
+        
+        Yvals, Xvals = np.indices( self.img.shape)
+        self.R = np.sqrt( (Yvals-self.CENT[1])**2 + (Xvals-self.CENT[0])**2 ) 
+    
+    def _mask_loader(self):
+        fr = tk.Frame(  self.top)
+        fr.pack(side=tk.TOP, expand=tk.YES, fill=tk.BOTH)
+        tk.Button(fr, text="Load a mask file (numpy binary .npy)" , command=self._set_mask)\
+            .grid(row=0,column=0)
+        self.mask_loaded_label = tk.Label(fr, text="Not loaded...")
+        self.mask_loaded_label.grid(row=0, column=1, sticky=tk.W)
+         
+    def _R_loader(self):
+        fr = tk.Frame(  self.top)
+        fr.pack(side=tk.TOP, expand=tk.YES, fill=tk.BOTH)
+        
+        tk.Button(fr, text="Load a pixel-radius file (numpy binary .npy)" , command=self._set_R)\
+            .pack(side=tk.LEFT, expand=tk.YES)
+
+    def make_number_entries(self):
+        fr = tk.Frame( self.top)
+        fr.pack(side=tk.TOP, expand=tk.YES, fill=tk.BOTH)
+        
+        self.pk_par_vars ={}
+        for row,e in enumerate(self.number_entries.keys()):
+            
+            self.pk_par_vars[e] = tk.StringVar()
+            entry = tk.Entry(fr, text="", textvariable=self.pk_par_vars[e])
+            entry.grid( row=row, column=0) 
+            self.pk_par_vars[e].set( str(PK_PAR[e]))
+            
+            tk.Label(fr, text=self.number_info[e], justify=tk.LEFT, anchor=tk.W).grid(row=row, column=1, sticky=tk.W)
+    
+    def make_bool_entries(self):
+        fr = tk.Frame( self.top)
+        fr.pack(side=tk.TOP, expand=tk.YES, fill=tk.BOTH)
+        
+        for row,e in enumerate( self.bool_entries):
+
+            self.pk_par_vars[e] = tk.IntVar()
+            c = tk.Checkbutton(fr, text=self.bool_info[e], variable=self.pk_par_vars[e],
+                                anchor="w", justify=tk.LEFT, command=self.bool_cmd[e])
+            c.pack(side=tk.TOP)
+            self.pk_par_vars[e].set( int(PK_PAR[e]) ) 
+   
+    def launch_warning(self, proc_mssg):
+        warningWindow = tk.Toplevel()
+        tk.Label(warningWindow, text=proc_mssg, background='red', foreground='white', font='BOLD' ).pack()
+        tk.Button( warningWindow, text='OK',command=warningWindow.destroy, relief=tk.RAISED,font='BOLD' ).pack()
+
+    
+    def inputs(self):
+        
+        self.number_entries = {  "sig_G":float, "nsigs":float, 
+            "min_snr":float, "sz":int, "r_in":float, "r_out":float, 
+            "min_dist":float, "thresh":float , 
+            "min_conn": int, "max_conn": int}
+        
+        self.number_info = {  "sig_G":"Gaussian blur", 
+            "nsigs":"Minimum standard devitions from mean", 
+            "min_snr":"Minimum SNR", 
+            "sz":"SNR box size", 
+            "r_in":"Minimum radius", 
+            "r_out":"Maximum radius", 
+            "min_dist":"Minimum separation of peaks", 
+            "thresh":"Minimum ADU for a peak" , 
+            "min_conn": "Minimum connected pixels in peak", 
+            "max_conn": "Maximum connected pixels in peak"}
+       
+        #str_entries = {"mask":str, "R":str}
+        self.bool_entries = {"filt":bool, "run_rad_med":bool, "peak_COM":bool}
+        self.bool_info={"filt":"Filter based on local SNR", 
+                        "run_rad_med":"Use radial median subtraction",
+                        "peak_COM":"Detect peak center-of-intensity (instead of peak maximum)"} 
+        
+        
+        def check_run_rad_med():
+            if self.R is None:
+                self.launch_warning("Define or load a radial pixel map first!")
+                self.pk_par_vars["run_rad_med"].set(0)
+                return
+            
+
+
+        bool_cmd = {"run_rad_med": check_run_rad_med}
+
+        self.bool_cmd = dict([ (k,bool_cmd[k]) if k in bool_cmd else (k,lambda x:None) 
+            for k in self.bool_info.keys() ])
+        
+        self.top = tk.Toplevel()
+
+        self.make_number_entries()
+        self.make_bool_entries()
+        self.entry_type ={k: v for d in [self.number_entries, self.bool_entries] 
+                            for k, v in d.items()} 
+        
+        fr = tk.Frame( self.top)
+        fr.pack(side=tk.TOP, expand=tk.YES, fill=tk.BOTH)
+        tk.Button( fr,  text="RUN", command=self._update_display).pack(side=tk.TOP)
+   
+    def get_inputs(self):
+        for e, entry in self.pk_par_vars.items():
+            
+            if entry.get() == 'None':
+                eget = None
+           
+            elif entry.get() is None:
+                eget = None
+            
+            else:
+                eget = self.entry_type[e] ( entry.get() )
+            
+            PK_PAR[e] = eget
+    
+    
+    def _set_idx_fname_path(self):
+        self.idx = self.indices[self.counter]
+
+    def _set_image(self, first=False):
+        dset = self.imgs 
+        self.img = dset[self.idx]  
+        if first:
+            toplvl= tk.Toplevel(self.master)
+            self.IV = ImageViewer(toplvl, self.img) 
+            self.IV.pack( fill=tk.BOTH, expand=1)
+            self.fig = self.IV.fig
+            self.ax = self.IV.ax
+
+
+    def _set_npeaks_lab_text(self):
+        self.npeaks_lab.config(text=self.npeaks_lab_text%self.Num_peaks)
+
+    def _set_centers(self):
+        i = self.indices[self.counter]
+        self.get_inputs()
+        #PK_PAR = self.get_params()
+        PK_PAR["mask"] = self.MASK
+        PK_PAR["R"] = self.R
+        PK_PAR["cent"] = self.CENT 
+        if PK_PAR["mask"] is not None:
+            self.known_centers,_ = find_peaks4.pk_pos4(  self.img*PK_PAR["mask"], **PK_PAR )
+        else:
+            self.known_centers,_ = find_peaks4.pk_pos4(  self.img, **PK_PAR )
+        
+        self.Num_peaks = len( self.known_centers)
+        self._set_npeaks_lab_text() 
+        print("Found %d peaks"%(len(self.known_centers) ))
+
+    def _display(self):
+        
+        if self.fix_zoom_variable.get() == 1:
+            self.xl = self.ax.get_xlim()
+            self.yl = self.ax.get_ylim()
+            print (self.xl, self.yl)
+        else:
+            self.xl = (-0.5, self.img.shape[1] - 0.5)
+            self.yl = (self.img.shape[0] - 0.5, -0.5)
+
+
+        self.title_str = '%s; %s:%d, \ncounter: %d/%d' %\
+            ("", "", self.idx, self.counter+1, len(self.indices))
+        self.ax.set_title(self.title_str)
+        print (self.title_str)
+        
+        
+        self.known_circs = []
+        for cent in self.known_centers:
+            circ = mpl.patches.Circle(
+                xy=(cent[1], cent[0]), radius=7, ec=self.circ_color, fc='none', lw=1)
+            self.ax.add_patch(circ)
+            self.known_circs.append(circ)
+            circ.set_visible(True)
+
+        self.pred_circ_visible = True
+
+        self.ax.set_xlim(self.xl)
+        self.ax.set_ylim(self.yl)
+        self.fig.canvas.draw()
+
+    def _buttons(self):
+
+        button_frame0 = tk.Frame(self, **fr)
+        button_frame0.pack(side=tk.TOP,  **frpk)
+
+        button_frame = tk.Frame(self, **fr)
+        button_frame.pack(side=tk.TOP, **frpk)
+
+        prev_button100 = tk.Button(button_frame0,
+                                   text='-100',
+                                   command=lambda: self._prev(100), **btnstyle)
+        prev_button100.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+        prev_button10 = tk.Button(button_frame0,
+                                  text='-10',
+                                  command=lambda: self._prev(10), **btnstyle)
+        prev_button10.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+        prev_button1 = tk.Button(button_frame0,
+                                 text='-1',
+                                 command=lambda: self._prev(1), **btnstyle)
+        prev_button1.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+
+        next_button1 = tk.Button(button_frame0,
+                                 text='+1',
+                                 command=lambda: self._next(1), **btnstyle)
+        next_button1.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+        next_button10 = tk.Button(button_frame0,
+                                  text='+10',
+                                  command=lambda: self._next(10), **btnstyle)
+        next_button10.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+        next_button100 = tk.Button(button_frame0,
+                                   text='+100',
+                                   command=lambda: self._next(100), **btnstyle)
+        next_button100.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+
+        self.fix_zoom_variable = tk.IntVar()
+        self.fix_zoom = tk.Checkbutton(button_frame,
+                             text='fix zoom', variable=self.fix_zoom_variable,
+                             command=self._fix_zoom, **btnstyle)
+        self.fix_zoom.pack(side=tk.LEFT, expand=tk.NO, **frpk)
+
+
+
+    def _next(self, increment):
+        self.counter += increment
+        if self.counter >= len(self.indices):
+            self.counter = self.counter - increment
+            self.counter = len( self.indices)-1 #self.counter - increment
+        self._update_display()
+
+    def _prev(self, increment):
+        self.counter = self.counter - increment
+        if self.counter < 0:
+            self.counter = 0
+        self._update_display()
+
+    def _toggle_known(self):
+        #self.known_circ_visible = not self.known_circ_visible
+        known_circ_visible = self.toggle_known_var.get()
+        for circ in self.known_circs:
+            circ.set_visible(known_circ_visible)
+        self.fig.canvas.draw()
+        #plt.pause(0.001)
+
+
+    def _fix_zoom(self):
+        if self.fix_zoom_variable.get()==1:
+            self.xl = self.ax.get_xlim()
+            self.yl = self.ax.get_ylim()
+        else:
+            self._reset_zoom()
+
+    def _reset_zoom(self):
+        self.xl = (-0.5, self.img.shape[1] - 0.5)
+        self.yl = (self.img.shape[0] - 0.5, -0.5)
+        self.ax.set_xlim(self.xl)
+        self.ax.set_ylim(self.yl)
+        self.fig.canvas.draw()
+        #plt.pause(0.001)
+
+
+    def _update_display(self):
+        #self.idx = self.indices[self.counter]
+        self._set_idx_fname_path()
+        #self._set_df()
+        self._set_image()
+        self._set_centers()
+        #self.ax.clear()
+        self.IV.set_data(self.img)
+        patches = self.ax.patches
+        while patches:
+            _ = patches.pop()
+        #self.IV._im = self.ax.imshow(self.img, aspect='equal', interpolation='nearest', norm=None, 
+        #    vmin=self.IV.vmin, vmax=self.IV.vmax, cmap='gnuplot')
+        
+        self.fig.canvas.draw()
+        if has_loki:
+            if self.viewing_radpro:
+                self._update_radpro()
+        self._display()
+
+
+###########################
+###########################
+###########################
+###########################
+###########################
+###########################
+###########################
+
+
+#!~~~~~~~~~~~~~~~~
+#!~~~~~~~~~~~~~~~~
+#!~~~~~~~~~~~~~~~~
+#!~~~~~~~~~~~~~~~~
+#!~~~~~~~~~~~~~~~~
+#!~~~~~~~~~~~~~~~~
+#!~~~~~~~~~~~~~~~~
+#!~~~~~~~~~~~~~~~~
+#!~~~~~~~~~~~~~~~~
+
+
+if __name__ == '__main__':
+    from argparse import ArgumentParser
+    parser = ArgumentParser(
+        description='')
+    parser.add_argument(
+        '-data',
+        dest='images_path',
+        type=str,
+        default='data')
+
+    parser.add_argument(
+        '-p, --peaks-path',
+        dest='peaks_path',
+        type=str,
+        default='peaks')
+
+    parser.add_argument(
+        '-f, --fname',
+        dest='fname',
+        type=str,
+        default=None)
+    
+    parser.add_argument(
+        '--circ-color',
+        dest='circ_color',
+        type=str,
+        default='Deeppink')
+    
+    #parser.add_argument(
+    #    '--sig-G',
+    #    dest='sig_G',
+    #    type=float,
+    #    default=None, 
+    #    help='gaussian blur sigma in pixels')
+    #parser.add_argument(
+    #    '--min-dist',
+    #    dest='min_dist',
+    #    type=float,
+    #    default=None,help='min pixel distance between peaks')
+    #parser.add_argument(
+    #    '--min-snr',
+    #    dest='min_snr',
+    #    type=float,
+    #    default=None, 
+    #    help='Minimum signal to noise ratio for peak')
+    #parser.add_argument(
+    #    '--nsigs',
+    #    dest='nsigs',
+    #    type=float,
+    #    default=None, 
+    #    help='pixel threshold')
+
+    args = parser.parse_args()
+
+
+    
+    root = tk.Tk()
+    root.title("DDview")
+    frame = ModelApp(
+        root,
+        args.fname,
+        args.images_path,
+        args.peaks_path,
+        circ_color=args.circ_color,
+        height=900,
+        width=700,
+        bg='snow')
+    frame.pack(fill=tk.BOTH, side=tk.TOP, expand=tk.YES)
+    #plt.draw()
+    #plt.pause(0.0001)
+    root.mainloop()
